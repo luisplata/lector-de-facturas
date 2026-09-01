@@ -3,7 +3,7 @@ services:
     build: ./ocr-service
     container_name: ocr-service
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8002:8000" # 8002 en host para no chocar con mmo-api-server:8000, solo localhost
     networks:
       - facturdor-net
     restart: unless-stopped
@@ -11,3 +11,6 @@ services:
 networks:
   facturdor-net:
     driver: bridge
+    # Para que n8n (n8n_n8n_1) llegue por http://ocr-service:8000,
+    # conectalo a esta red después del deploy:
+    # docker network connect facturdor-net n8n_n8n_1
