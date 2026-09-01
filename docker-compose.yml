@@ -1,0 +1,13 @@
+services:
+  ocr-service:
+    build: ./ocr-service
+    container_name: ocr-service
+    ports:
+      - "8000:8000"
+    networks:
+      - facturdor-net
+    restart: unless-stopped
+
+networks:
+  facturdor-net:
+    driver: bridge

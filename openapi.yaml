@@ -1,0 +1,287 @@
+openapi: 3.0.3
+info:
+  title: FacturDor OCR Service
+  description: |
+    Servicio OCR para facturas térmicas colombianas. Usado por n8n (Telegram Trigger) en el MVP:
+    Telegram foto → POST /parse → LLM categoriza → Telegram respuesta.
+    Motor: rapidocr-onnxruntime (~600MB, CPU, lang=es).
+  version: 1.0.0
+  contact:
+    name: FacturDor
+servers:
+  - url: http://localhost:8000
+    description: Local (docker compose)
+  - url: http://ocr-service:8000
+    description: Dentro de docker network (n8n → ocr-service)
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      tags: [system]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  engine:
+                    type: string
+                    example: rapidocr-onnxruntime
+
+  /ocr:
+    post:
+      summary: OCR crudo
+      description: Recibe imagen y devuelve texto + segmentos con confianza y bbox. Útil para debug.
+      operationId: ocrImage
+      tags: [ocr]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Imagen JPG/PNG de la factura (foto celular)
+      parameters:
+        - in: query
+          name: min_confidence
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+            default: 0.4
+          description: Filtra filtered_segments por confianza >= valor
+      responses:
+        '200':
+          description: OCR exitoso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OcrResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /parse:
+    post:
+      summary: OCR + parsing heurístico (usado por n8n)
+      description: |
+        Endpoint principal del MVP. Hace OCR, agrupa por fila (y_thresh=12px) y parsea
+        heurísticamente NIT, fecha, productos y totales. Devuelve `ocr_text` (fuente de verdad)
+        y `parsed` (best-effort) para que el nodo IA de n8n categorice y corrija OCR.
+        El LLM debe usar `ocr_text` si `parsed.productos` viene incompleto.
+      operationId: parseImage
+      tags: [ocr]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      parameters:
+        - in: query
+          name: min_confidence
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+            default: 0.4
+          description: Umbral para filtered_segments / ocr_text
+      responses:
+        '200':
+          description: Parse exitoso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParseResponse'
+              example:
+                status: success
+                engine: rapidocr-onnxruntime
+                ocr_text: "Fecha:31/08/2026\n1.44Kg 15400-7012-PECHUGA BLANCA 0 22176\n..."
+                segments:
+                  - text: "Fecha:31/08/2026"
+                    confidence: 0.976
+                    bbox: [[663, 473], [857, 471], [857, 505], [663, 507]]
+                parsed:
+                  comercio: { nit: null, nombre: null }
+                  fecha: "31/08/2026"
+                  productos:
+                    - cantidad: "1.44Kg"
+                      codigo: "15400-7012"
+                      descripcion: "PECHUGA BLANCA"
+                      iva: "0"
+                      total: "22176"
+                      raw: "1.44Kg 15400-7012-PECHUGA BLANCA 0 22176"
+                  totales_detectados:
+                    efectivo_entregado: "400,000"
+                    cambio: "17,350"
+                  conteo_productos: 4
+                llm_hint: "Usá `parsed.productos` y `ocr_text` para categorizar..."
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+components:
+  schemas:
+    Bbox:
+      type: array
+      items:
+        type: array
+        items:
+          type: number
+      example: [[239, 847], [654, 830], [655, 864], [240, 880]]
+      description: 4 esquinas [x,y] en píxeles (post upscale ~2000px)
+
+    Segment:
+      type: object
+      required: [text, confidence, bbox]
+      properties:
+        text:
+          type: string
+          example: "1.44Kg 15400-7012-PECHUGA BLANCA"
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.948
+        bbox:
+          $ref: '#/components/schemas/Bbox'
+
+    Producto:
+      type: object
+      required: [cantidad, codigo, descripcion, iva, total, raw]
+      properties:
+        cantidad:
+          type: string
+          example: "1.44Kg"
+        codigo:
+          type: string
+          example: "15400-7012"
+        descripcion:
+          type: string
+          example: "PECHUGA BLANCA"
+        iva:
+          type: string
+          example: "0"
+        total:
+          type: string
+          example: "22176"
+        raw:
+          type: string
+          description: Línea reconstruida por group_segments_by_row
+          example: "1.44Kg 15400-7012-PECHUGA BLANCA 0 22176"
+
+    Parsed:
+      type: object
+      properties:
+        comercio:
+          type: object
+          properties:
+            nit:
+              type: string
+              nullable: true
+              example: "800106714-0"
+            nombre:
+              type: string
+              nullable: true
+              example: "MERCADO ZAPATOCA S.A"
+        fecha:
+          type: string
+          nullable: true
+          example: "31/08/2026"
+        productos:
+          type: array
+          items:
+            $ref: '#/components/schemas/Producto'
+        totales_detectados:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            efectivo_entregado: "400,000"
+            cambio: "17,350"
+            "12,227": "12,227"
+        conteo_productos:
+          type: integer
+          example: 4
+
+    OcrResponse:
+      type: object
+      required: [text, status, segments, filtered_segments, engine]
+      properties:
+        text:
+          type: string
+          description: "filtered_segments unidos por \\n"
+        status:
+          type: string
+          example: success
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Segment'
+        filtered_segments:
+          type: array
+          items:
+            type: string
+        engine:
+          type: string
+          example: rapidocr-onnxruntime
+
+    ParseResponse:
+      type: object
+      required: [status, engine, ocr_text, segments, parsed, llm_hint]
+      properties:
+        status:
+          type: string
+          example: success
+        engine:
+          type: string
+          example: rapidocr-onnxruntime
+        ocr_text:
+          type: string
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Segment'
+        parsed:
+          $ref: '#/components/schemas/Parsed'
+        llm_hint:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Request inválido (archivo vacío o no decodificable)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+                example: "No se pudo decodificar la imagen. Verificá que sea JPG/PNG válido."
+    ServerError:
+      description: Error interno (ej. PIL ANTIALIAS, OCR crash)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
