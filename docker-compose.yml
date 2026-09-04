@@ -3,14 +3,18 @@ services:
     build: ./ocr-service
     container_name: ocr-service
     ports:
-      - "127.0.0.1:8002:8000" # 8002 en host para no chocar con mmo-api-server:8000, solo localhost
+      - "8000:8000" # En VPS usa "127.0.0.1:8002:8000" para no chocar con mmo:8000
     networks:
       - facturdor-net
+      - automation_default # para n8n local (automation/n8n). En VPS es n8n_default
     restart: unless-stopped
 
 networks:
   facturdor-net:
     driver: bridge
-    # Para que n8n (n8n_n8n_1) llegue por http://ocr-service:8000,
-    # conectalo a esta red después del deploy:
+  automation_default:
+    external: true
+    name: automation_default
+    # En VPS la red es n8n_default, no automation_default.
+    # Si deployás en VPS, cambiá arriba a n8n_default o usá:
     # docker network connect facturdor-net n8n_n8n_1
