@@ -33,6 +33,10 @@ curl -X POST "http://localhost:8000/ocr?min_confidence=0.4" \
 # OCR + parsing (usado por n8n)
 curl -X POST "http://localhost:8000/parse?min_confidence=0.4" \
   -F "file=@factura.jpg" | jq
+
+# Probar n8n Webhook local sin copiar la imagen al contenedor
+curl -X POST http://localhost:5678/webhook-test/27e9d3ed-2b44-40a2-81dc-9520d43ef813 \
+  -F "file=@C:\Users\luis_\Downloads\factura.jpg"
 ```
 
 Fotos: apoyá la factura en mesa oscura, luz difusa arriba, sin flash ni dedo tapando. Con eso pasás de 60% a 90% de acierto.
